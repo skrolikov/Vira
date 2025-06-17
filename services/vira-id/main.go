@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"vira-id/internal/handlers"
 	"vira-id/internal/service"
@@ -15,13 +16,28 @@ import (
 	log "github.com/skrolikov/vira-logger"
 	middleware "github.com/skrolikov/vira-middleware"
 	redisdb "github.com/skrolikov/vira-redisdb"
+
+	kafkago "github.com/segmentio/kafka-go"
 )
 
+// @title Vira ID API
+// @version 1.0
+// @description Сервис авторизации Vira.
+// @termsOfService http://example.com/terms/
+
+// @contact.name Поддержка Vira
+// @contact.url http://vira.example.com/support
+// @contact.email support@vira.example.com
+
+// @license.name MIT
+// @license.url https://opensource.org/licenses/MIT
+
+// @host vira-id:8000
+// @BasePath /
 func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	// создаём базовый логгер (без вызова WithContext)
 	baseLogger := log.New(log.Config{
 		Level:      log.DEBUG,
 		JsonOutput: false,
@@ -36,64 +52,66 @@ func main() {
 
 	baseLogger.Info("🚀 Запуск Vira-ID")
 
-	// Redis
 	redisConn, err := redisdb.New(ctx, redisdb.Config{
 		Addr:     cfg.RedisAddr,
 		Password: "",
 		DB:       cfg.RedisDB,
-	}, baseLogger.WithFields(map[string]any{
-		"component": "redis",
-	}))
+	}, baseLogger.WithFields(map[string]any{"component": "redis"}))
 	if err != nil {
 		baseLogger.Fatal("❌ Ошибка подключения к Redis: %v", err)
 	}
 	defer redisConn.Close()
 	rdb := redisConn.Client()
 
-	// DB
 	if _, err := db.Init(ctx, cfg); err != nil {
 		baseLogger.Fatal("❌ Ошибка инициализации базы: %v", err)
 	}
-	userRepo := db.NewUserRepository(db.Get())
 
-	// Kafka
-	kafkaLogger := baseLogger.WithFields(map[string]any{
-		"component": "kafka",
-	})
+	dbConn, err := db.Get()
+	if err != nil {
+		baseLogger.Fatal("❌ Ошибка получения соединения с БД: %v", err)
+	}
+
+	userRepo := db.NewUserRepository(dbConn)
+
+	kafkaLogger := baseLogger.WithFields(map[string]any{"component": "kafka"})
+
+	// ✅ Конфигурация Kafka Producer
 	producer := kafka.NewProducer(kafka.ProducerConfig{
 		Brokers:      []string{cfg.KafkaAddr},
 		Topic:        "vira-events",
-		BatchTimeout: 100,
+		BatchTimeout: 100 * time.Millisecond,
 		Async:        false,
-	}, kafkaLogger)
 
-	defer func() {
-		if err := producer.Close(); err != nil {
-			kafkaLogger.Error("Ошибка закрытия Kafka продюсера: %v", err)
-		}
-	}()
+		RequiredAcks: kafkago.RequireAll,
+		Compression:  kafkago.Snappy,
+		MaxAttempts:  5,
 
-	kafkaLogger.Info("🛰️ Kafka producer готов к работе")
+		Logger: kafkaLogger,
+		Tracer: nil, // или otel.Tracer("vira-id"), если уже подключён
+	})
+	defer producer.Close()
 
 	authService := service.NewAuthService(cfg, userRepo, rdb, producer, baseLogger)
-	// Маршруты
+
 	r := chi.NewRouter()
 
-	r.Use(middleware.RequestID())               // если реализована
-	r.Use(middleware.ContextLogger(baseLogger)) // если реализована
+	r.Use(middleware.RequestID())
+	r.Use(middleware.ContextLogger(baseLogger))
 
 	r.Post("/login", handlers.LoginHandler(authService))
 	r.Post("/register", handlers.RegisterHandler(authService))
 	r.Post("/refresh", handlers.RefreshHandler(authService))
+
+	// Новый маршрут подтверждения
+	r.Get("/confirm", handlers.ConfirmUserHandler(authService))
 
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 
 	r.Get("/redis-test", func(w http.ResponseWriter, r *http.Request) {
 		logger := baseLogger.WithContext(r.Context())
 		if err := rdb.Set(r.Context(), "test_key", "123", 0).Err(); err != nil {
-			logger.WithFields(map[string]any{
-				"err": err,
-			}).Error("Ошибка при записи в Redis")
+			logger.WithFields(map[string]any{"err": err}).Error("Ошибка при записи в Redis")
 			http.Error(w, "ошибка Redis", http.StatusInternalServerError)
 			return
 		}

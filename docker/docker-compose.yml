@@ -140,6 +140,15 @@ services:
     depends_on:
       - gateway
 
+  vira-docs:
+    build: ../frontend/vira-docs
+    ports:
+      - "5175:5175"
+    networks:
+      - vira-net
+    depends_on:
+      - gateway
+
 volumes:
   pgdata:
 

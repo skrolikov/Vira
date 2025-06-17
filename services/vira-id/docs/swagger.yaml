@@ -1,0 +1,384 @@
+basePath: /
+definitions:
+  types.AuthResponse:
+    properties:
+      tokens:
+        allOf:
+        - $ref: '#/definitions/types.TokenPair'
+        description: Пара токенов доступа
+      user:
+        allOf:
+        - $ref: '#/definitions/types.UserInfo'
+        description: Данные пользователя
+    type: object
+  types.ErrorResponse:
+    properties:
+      error:
+        description: Текст ошибки
+        example: Неверный токен
+        type: string
+    type: object
+  types.LoginRequest:
+    properties:
+      password:
+        description: Пароль
+        example: secret123
+        type: string
+      username:
+        description: Имя пользователя
+        example: john_doe
+        type: string
+    type: object
+  types.LogoutRequest:
+    properties:
+      refresh_token:
+        description: Refresh токен
+        example: eyJhbGciOiJIUzI1NiIsIn...
+        type: string
+    type: object
+  types.RefreshRequest:
+    properties:
+      refresh_token:
+        description: Refresh токен
+        example: eyJhbGciOiJIUzI1NiIsIn...
+        type: string
+    type: object
+  types.RegisterRequest:
+    properties:
+      email:
+        description: Email (опционально)
+        example: john@example.com
+        type: string
+      password:
+        description: Пароль
+        example: secret123
+        type: string
+      username:
+        description: Имя пользователя
+        example: john_doe
+        type: string
+    type: object
+  types.SessionInfo:
+    properties:
+      device:
+        description: Информация о устройстве / User-Agent
+        example: Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+        type: string
+      id:
+        description: Уникальный ID сессии
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      ip:
+        description: IP адрес сессии
+        example: 192.168.1.10
+        type: string
+      login_time:
+        description: Время входа в сессию (ISO 8601)
+        example: "2025-06-12T14:22:35Z"
+        type: string
+      token:
+        description: Токен сессии (может быть обрезан)
+        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        type: string
+      user_id:
+        description: ID пользователя
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+    type: object
+  types.SessionsResponse:
+    properties:
+      cursor:
+        description: Курсор для следующей страницы (0 — начало)
+        example: 0
+        type: integer
+      sessions:
+        description: Список сессий пользователя
+        items:
+          $ref: '#/definitions/types.SessionInfo'
+        type: array
+    type: object
+  types.TokenPair:
+    properties:
+      access_token:
+        description: Access токен
+        example: eyJhbGciOiJIUzI1NiIsIn...
+        type: string
+      refresh_token:
+        description: Refresh токен
+        example: eyJhbGciOiJIUzI1NiIsIn...
+        type: string
+    type: object
+  types.UserInfo:
+    properties:
+      id:
+        description: Уникальный ID пользователя
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      role:
+        description: Роль пользователя
+        example: user
+        type: string
+      username:
+        description: Имя пользователя
+        example: john_doe
+        type: string
+    type: object
+host: vira-id:8000
+info:
+  contact:
+    email: support@vira.example.com
+    name: Поддержка Vira
+    url: http://vira.example.com/support
+  description: Сервис авторизации Vira.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://example.com/terms/
+  title: Vira ID API
+  version: "1.0"
+paths:
+  /auth/confirm:
+    get:
+      consumes:
+      - application/json
+      description: Подтверждает пользователя по email и токену подтверждения. Требует
+        обязательные параметры email и token в query string.
+      parameters:
+      - description: Email пользователя для подтверждения
+        in: query
+        name: email
+        required: true
+        type: string
+      - description: Токен подтверждения, отправленный пользователю на email
+        in: query
+        name: token
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Пользователь успешно подтверждён
+          schema:
+            type: string
+        "400":
+          description: 'необходимо указать email и токен" или "не удалось подтвердить
+            пользователя: описание ошибки'
+          schema:
+            type: string
+      summary: Подтверждение пользователя
+      tags:
+      - Auth
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Авторизация по логину и паролю
+      parameters:
+      - description: Данные входа
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/types.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+      summary: Вход
+      tags:
+      - auth
+  /logout:
+    post:
+      consumes:
+      - application/json
+      description: Удаляет refresh токен и завершает сессию
+      parameters:
+      - description: Refresh токен
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/types.LogoutRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+      summary: Выход
+      tags:
+      - auth
+  /me:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает ID и имя пользователя, основываясь на информации из
+        JWT (или другого механизма аутентификации).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Информация о пользователе
+          schema:
+            $ref: '#/definitions/types.UserInfo'
+        "401":
+          description: unauthorized" "Пользователь не аутентифицирован
+          schema:
+            type: string
+        "404":
+          description: user not found" "Пользователь не найден в базе данных
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Получить информацию о текущем пользователе
+      tags:
+      - Пользователь
+  /refresh:
+    post:
+      consumes:
+      - application/json
+      description: Обновляет пару токенов по refresh-токену
+      parameters:
+      - description: Refresh токен
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/types.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.TokenPair'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+      summary: Обновление токена
+      tags:
+      - auth
+  /register:
+    post:
+      consumes:
+      - application/json
+      description: Создание нового пользователя
+      parameters:
+      - description: Данные регистрации
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/types.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/types.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/types.ErrorResponse'
+      summary: Регистрация
+      tags:
+      - auth
+  /sessions:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает список активных сессий текущего пользователя. Поддерживается
+        пагинация с помощью параметра cursor.
+      parameters:
+      - description: Курсор для пагинации (числовое значение). Если не указан, возвращает
+          первые 20 сессий.
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Список сессий и следующий курсор для пагинации
+          schema:
+            $ref: '#/definitions/types.SessionsResponse'
+        "400":
+          description: Invalid cursor" "Неверный формат курсора
+          schema:
+            type: string
+        "401":
+          description: Unauthorized" "Пользователь не авторизован
+          schema:
+            type: string
+        "500":
+          description: Ошибка сервера
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Получить список сессий пользователя
+      tags:
+      - Сессии
+  /sessions/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Удаляет сессию пользователя из Redis по ID сессии. Также удаляет
+        refresh-токен, если он совпадает с удаляемой сессией.
+      parameters:
+      - description: ID сессии для удаления
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "204":
+          description: Сессия успешно удалена
+        "400":
+          description: Неверный ID сессии
+          schema:
+            type: string
+        "401":
+          description: Unauthorized" "Пользователь не авторизован
+          schema:
+            type: string
+        "500":
+          description: Ошибка сервера
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Удалить сессию пользователя
+      tags:
+      - Сессии
+swagger: "2.0"

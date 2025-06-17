@@ -17,11 +17,19 @@ func RegisterHandler(svc *service.AuthService) http.HandlerFunc {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		resp, err := svc.RegisterProxy(r.Context(), in.RegisterRequest, types.ProfileData{City: in.City})
+
+		resp, err := svc.RegisterProxy(
+			r.Context(),
+			in.RegisterRequest,
+			types.ProfileData{City: in.City},
+			r.RemoteAddr,
+			r.UserAgent(),
+		)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(resp)
@@ -35,11 +43,18 @@ func LoginHandler(svc *service.AuthService) http.HandlerFunc {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		resp, err := svc.LoginProxy(r.Context(), req)
+
+		resp, err := svc.LoginProxy(
+			r.Context(),
+			req,
+			r.RemoteAddr,
+			r.UserAgent(),
+		)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}

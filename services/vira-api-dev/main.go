@@ -4,15 +4,25 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	_ "github.com/lib/pq"
+
 	"vira-api-dev/internal/handlers"
 	"vira-api-dev/internal/repo"
 	"vira-api-dev/internal/service"
 	"vira-api-dev/internal/viraid"
 
 	"github.com/go-chi/chi/v5"
-	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	kafkago "github.com/segmentio/kafka-go"
 	config "github.com/skrolikov/vira-config"
+	kafka "github.com/skrolikov/vira-kafka"
 	log "github.com/skrolikov/vira-logger"
+	middleware "github.com/skrolikov/vira-middleware"
 	redisdb "github.com/skrolikov/vira-redisdb"
 )
 
@@ -20,7 +30,6 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	// создаём базовый логгер (без вызова WithContext)
 	baseLogger := log.New(log.Config{
 		Level:      log.DEBUG,
 		JsonOutput: false,
@@ -33,56 +42,71 @@ func main() {
 		Compress:   true,
 	})
 
-	baseLogger.Info("🚀 Запуск Vira-Dev")
+	baseLogger.Info("🚀 Запуск Vira-DEV")
 
-	// Redis
+	// Подключение к Redis
+	redisLogger := baseLogger.WithFields(map[string]any{"component": "redis"})
 	redisConn, err := redisdb.New(ctx, redisdb.Config{
 		Addr:     cfg.RedisAddr,
 		Password: "",
 		DB:       cfg.RedisDB,
-	}, baseLogger.WithFields(map[string]any{
-		"component": "redis",
-	}))
+	}, redisLogger)
 	if err != nil {
-		baseLogger.Fatal("❌ Ошибка подключения к Redis: %v", err)
+		redisLogger.Fatal("❌ Ошибка подключения к Redis: %v", err)
 	}
 	defer redisConn.Close()
 	rdb := redisConn.Client()
 
-	// БД Postgres
+	// Подключение к PostgreSQL
 	db, err := sql.Open("postgres", cfg.DevPostgresDSN)
 	if err != nil {
-		baseLogger.Fatal("db connect: %v", err)
+		baseLogger.Fatal("❌ Ошибка подключения к БД: %v", err)
 	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		baseLogger.Fatal("❌ Ping к БД не прошёл: %v", err)
+	}
+
+	// Настройка Kafka Producer
+	kafkaLogger := baseLogger.WithFields(map[string]any{"component": "kafka"})
+	producer := kafka.NewProducer(kafka.ProducerConfig{
+		Brokers:      []string{cfg.KafkaAddr},
+		Topic:        "vira-dev.users",
+		BatchTimeout: 100 * time.Millisecond,
+		Async:        false,
+
+		RequiredAcks: kafkago.RequireAll,
+		Compression:  kafkago.Snappy,
+		MaxAttempts:  5,
+
+		Logger: kafkaLogger,
+		Tracer: nil, // future: otel.Tracer("vira-api-dev")
+	})
 	defer func() {
-		if err := db.Close(); err != nil {
-			baseLogger.Error("failed to close database connection: %v", err)
+		if err := producer.Close(); err != nil {
+			kafkaLogger.Error("Ошибка закрытия Kafka продюсера: %v", err)
 		}
 	}()
 
-	// Проверка соединения с БД
-	if err := db.Ping(); err != nil {
-		baseLogger.Fatal("db ping failed: %v", err)
-	}
-
-	// Клиент Vira-ID
+	// Инициализация зависимостей
 	idClient := viraid.NewClient(cfg.ViraIDEndpoint)
+	userRepo := repo.NewUserProfileRepo(db)
+	authService := service.NewAuthService(idClient, userRepo, producer, baseLogger)
 
-	// Репозиторий и сервис
-	upr := repo.NewUserProfileRepo(db)
-	authSvc := service.NewAuthService(idClient, upr)
-
+	// HTTP роутер
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID())
+	r.Use(middleware.ContextLogger(baseLogger))
 
-	r.Post("/register", handlers.RegisterHandler(authSvc))
-	r.Post("/login", handlers.LoginHandler(authSvc))
+	r.Post("/register", handlers.RegisterHandler(authService))
+	r.Post("/login", handlers.LoginHandler(authService))
 
+	// Пример Redis-маршрута
 	r.Get("/redis-test", func(w http.ResponseWriter, r *http.Request) {
 		logger := baseLogger.WithContext(r.Context())
 		if err := rdb.Set(r.Context(), "test_key", "123", 0).Err(); err != nil {
-			logger.WithFields(map[string]any{
-				"err": err,
-			}).Error("Ошибка при записи в Redis")
+			logger.WithFields(map[string]any{"err": err}).Error("Ошибка Redis")
 			http.Error(w, "ошибка Redis", http.StatusInternalServerError)
 			return
 		}
@@ -90,8 +114,35 @@ func main() {
 		w.Write([]byte("Redis работает, значение: " + val))
 	})
 
-	baseLogger.Info("✅ Vira-DEV запущен на порту %s", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
-		baseLogger.Fatal("❌ Ошибка запуска сервера: %v", err)
+	// Метрики Prometheus
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
+
+	// Запуск HTTP-сервера
+	srv := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: r,
+	}
+
+	go func() {
+		baseLogger.Info("✅ Vira-DEV запущен на порту %s", cfg.Port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			baseLogger.Fatal("❌ Ошибка запуска сервера: %v", err)
+		}
+	}()
+
+	// Graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	<-stop
+	baseLogger.Info("🛑 Остановка сервера...")
+
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctxTimeout); err != nil {
+		baseLogger.Error("Ошибка при остановке сервера: %v", err)
+	} else {
+		baseLogger.Info("✅ Сервер успешно остановлен")
 	}
 }
