@@ -1,7 +1,7 @@
 <h1 align="center">Vira — модульная цифровая экосистема будущего</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-in%20progress-blueviolet?style=for-the-badge" alt="status" />
+  <img src="https://img.shields.io/badge/status-Черновик-lightgrey?style=for-the-badge" alt="status" />
   <img src="https://img.shields.io/badge/powered%20by-Go%20%7C%20React%20%7C%20Docker-black?style=for-the-badge" />
   <img src="https://img.shields.io/badge/design-themeable%20UI%20%7C%20animated%20interface-ff69b4?style=for-the-badge" />
 </p>
